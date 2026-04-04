@@ -235,6 +235,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_CASE(128, type_K, type_V)       \
     FATTN_VEC_CASE(256, type_K, type_V)       \
 
+#define FATTN_VEC_CASES_TURBO4_D(type_K, type_V) \
+    FATTN_VEC_CASES_ALL_D(type_K, type_V)        \
+    FATTN_VEC_CASE(512, type_K, type_V)          \
+
 static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_tensor * Q = dst->src[0];
     ggml_tensor * K = dst->src[1];
@@ -328,22 +332,23 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO3_0)
 
     // TurboQuant4 KV cache types (always enabled)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0)
 
     // Mixed turbo4/q8_0 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,     GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_Q8_0,     GGML_TYPE_TURBO4_0)
 
     // Mixed f16/turbo4 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,      GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO4_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_F16,      GGML_TYPE_TURBO4_0)
 
     // Mixed turbo4/turbo3 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO4_0)
 
     // Mixed turbo4/turbo2 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO4_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO4_0)
 
     GGML_ABORT("fatal error");
 }
@@ -368,6 +373,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
+
+    const bool uses_turbo4 = K->type == GGML_TYPE_TURBO4_0 || V->type == GGML_TYPE_TURBO4_0;
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -409,7 +416,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             if (V->ne[0] != K->ne[0]) {
                 return BEST_FATTN_KERNEL_NONE;
             }
-            if (!gqa_opt_applies) {
+            if (!gqa_opt_applies && !uses_turbo4) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
@@ -456,19 +463,17 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_TURBO3_0:
-            // turbo3 VEC kernel instantiated for D in {64, 128, 256}.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
         case GGML_TYPE_TURBO2_0:
-            // turbo2 VEC kernel instantiated for D in {64, 128, 256}.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
         case GGML_TYPE_TURBO4_0:
-            // turbo4 VEC kernel instantiated for D in {64, 128, 256}.
+            // Gemma 4 global layers use D=512 heads; keep turbo4 on VEC there.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
@@ -483,6 +488,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    if (uses_turbo4) {
+        const bool turbo4_vec_ok = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+        return turbo4_vec_ok ? BEST_FATTN_KERNEL_VEC : BEST_FATTN_KERNEL_NONE;
+    }
 
 #ifdef GGML_USE_HIP
     // HIP/ROCm: the TILE/MMA/WMMA FA paths allocate unbounded f16 temp buffers
