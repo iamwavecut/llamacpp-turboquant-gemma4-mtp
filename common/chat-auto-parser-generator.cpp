@@ -217,7 +217,19 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(inputs.generation_prompt, reasoning.start) + parser : p.prefix(inputs.generation_prompt, reasoning.start) << parser;
+
+        auto generation_prompt = p.prefix(inputs.generation_prompt, reasoning.start);
+        if (!reasoning.start.empty() && !reasoning.end.empty()) {
+            auto start_pos = inputs.generation_prompt.rfind(reasoning.start);
+            if (start_pos != std::string::npos) {
+                auto end_pos = inputs.generation_prompt.find(reasoning.end, start_pos + reasoning.start.size());
+                if (end_pos != std::string::npos) {
+                    generation_prompt = p.literal(inputs.generation_prompt);
+                }
+            }
+        }
+
+        return pure_content ? generation_prompt + parser : generation_prompt << parser;
     });
 }
 

@@ -1331,6 +1331,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & tool_choice(common_chat_tool_choice val) {
+        tc_.params.tool_choice = val;
+        return *this;
+    }
+
     peg_test_builder & enable_thinking(bool val) {
         tc_.params.enable_thinking = val;
         return *this;
@@ -1985,6 +1990,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>")
             .tools({ get_time_tool })
             .expect(message_with_tool_calls("get_time", R"({"city": "London"})"))
+            .run();
+
+        // No-thinking generation prompt pre-fills an empty thought channel.
+        // Non-lazy grammars must accept the complete prefill before the tool call.
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "London"})"))
+            .run();
+
+        // The same closed thought-channel prefill must also work for response_format.
+        tst.test(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
         // Tool call with string argument containing special chars
