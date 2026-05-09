@@ -1118,7 +1118,13 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
+        auto generation_prompt = p.prefix(inputs.generation_prompt, "<|channel>");
+        const auto thought_pos = inputs.generation_prompt.rfind("<|channel>thought");
+        if (thought_pos != std::string::npos &&
+                inputs.generation_prompt.find("<channel|>", thought_pos + sizeof("<|channel>thought") - 1) != std::string::npos) {
+            generation_prompt = p.literal(inputs.generation_prompt);
+        }
+        auto start = p.rule("start", generation_prompt);
 
         if (extract_reasoning) {
             p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
@@ -2396,4 +2402,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-

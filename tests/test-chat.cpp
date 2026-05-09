@@ -1202,12 +1202,14 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // start of the model output (i.e. tc.input).
         std::string constrained = full_input;
         bool grammar_triggered = false;
-        if (earliest_trigger_pos != std::string::npos) {
+        if (!parser.params_.grammar_lazy) {
+            // Non-lazy grammars are active from the start and are prefilled with
+            // the generation prompt in production, so the full prompt + output
+            // should match the grammar.
+            grammar_triggered = true;
+        } else if (earliest_trigger_pos != std::string::npos) {
             auto constrain_from = std::max(earliest_trigger_pos, gen_prompt.size());
             constrained = full_input.substr(constrain_from);
-            grammar_triggered = true;
-        } else if (!parser.params_.grammar_lazy) {
-            // For non-lazy grammars, the entire input should match
             grammar_triggered = true;
         }
 
@@ -2026,7 +2028,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // The same closed thought-channel prefill must also work for response_format.
-        tst.test(R"({"amount": 123.45, "date": "2025-12-03"})")
+        tst.test("```json" R"({"amount": 123.45, "date": "2025-12-03"})" "```")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .json_schema(invoice_schema)
