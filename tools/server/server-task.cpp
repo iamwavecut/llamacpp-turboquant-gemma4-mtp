@@ -307,9 +307,10 @@ task_params server_task::params_from_json_cmpl(
 
     params.speculative = defaults.speculative;
 
-    params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
-    params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);
-    params.speculative.p_min = json_value(data, "speculative.p_min", defaults.speculative.p_min);
+    params.speculative.n_min            = json_value(data, "speculative.n_min",            defaults.speculative.n_min);
+    params.speculative.n_max            = json_value(data, "speculative.n_max",            defaults.speculative.n_max);
+    params.speculative.p_min            = json_value(data, "speculative.p_min",            defaults.speculative.p_min);
+    params.speculative.draft_block_size = json_value(data, "speculative.draft_block_size", defaults.speculative.draft_block_size);
 
     params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
     params.speculative.n_min = std::max(params.speculative.n_min, 0);

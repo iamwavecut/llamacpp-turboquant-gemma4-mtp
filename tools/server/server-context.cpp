@@ -19,6 +19,7 @@
 #include <cinttypes>
 #include <exception>
 #include <memory>
+#include <sstream>
 #include <filesystem>
 #include <utility>
 
@@ -376,6 +377,10 @@ struct server_slot {
         }
 
         if (spec_draft.empty()) {
+            // Drain any in-flight async MTP submitted by a previous prepare_next() before
+            // the next target decode can mutate the same backend/KV state.
+            common_speculative_cancel(spec.get());
+
             // no speculative decoding
             i_batch = batch.n_tokens;
 
@@ -416,6 +421,8 @@ struct server_slot {
             t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
 
             state = SLOT_STATE_IDLE;
+
+            common_speculative_cancel(spec.get());
 
             // do not keep context of the child slots - the parent's context is enough
             if (task->is_child()) {
@@ -706,6 +713,7 @@ private:
 
         for (server_slot & slot : slots) {
             if (slot.can_speculate()) {
+                common_speculative_cancel(slot.spec.get());
                 slot.spec.reset();
             }
         }
@@ -765,38 +773,44 @@ private:
 
         if (params_base.speculative.has_dft()) {
             // TODO speculative: move to common/speculative.cpp?
-            SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
-
             const auto & params_spec = params_base.speculative;
 
-            auto params_dft = params_base;
+            if (params_spec.type == COMMON_SPECULATIVE_TYPE_MTP) {
+                // MTP assistant is loaded into the target in common_init_from_params (llama_model_load_mtp_from_file).
+                SRV_INF("MTP assistant path '%s' (loaded into target model)\n", params_spec.mparams_dft.path.c_str());
+                params_base.speculative.model_dft = nullptr;
+            } else {
+                SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
 
-            params_dft.n_parallel   = 1;
-            params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;
-            params_dft.n_batch      = llama_n_ctx_seq(ctx);
-            params_dft.devices      = params_spec.devices;
-            params_dft.model        = params_spec.mparams_dft;
-            params_dft.n_gpu_layers = params_spec.n_gpu_layers;
-            params_dft.cache_type_k = params_spec.cache_type_k;
-            params_dft.cache_type_v = params_spec.cache_type_v;
+                auto params_dft = params_base;
 
-            if (params_spec.cpuparams.n_threads > 0) {
-                params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
-                params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
+                params_dft.n_parallel   = 1;
+                params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;
+                params_dft.n_batch      = llama_n_ctx_seq(ctx);
+                params_dft.devices      = params_spec.devices;
+                params_dft.model        = params_spec.mparams_dft;
+                params_dft.n_gpu_layers = params_spec.n_gpu_layers;
+                params_dft.cache_type_k = params_spec.cache_type_k;
+                params_dft.cache_type_v = params_spec.cache_type_v;
+
+                if (params_spec.cpuparams.n_threads > 0) {
+                    params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
+                    params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
+                }
+
+                params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
+
+                auto mparams_dft = common_model_params_to_llama(params_dft);
+
+                model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
+                if (model_dft == nullptr) {
+                    SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+                    return false;
+                }
+
+                params_base.speculative.model_dft = model_dft.get();
+                params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
             }
-
-            params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
-
-            auto mparams_dft = common_model_params_to_llama(params_dft);
-
-            model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
-            if (model_dft == nullptr) {
-                SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
-                return false;
-            }
-
-            params_base.speculative.model_dft = model_dft.get();
-            params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
@@ -900,8 +914,15 @@ private:
                 slot.spec.reset(common_speculative_init(params_base.speculative, slot.ctx));
 
                 if (slot.spec) {
+                    if (mctx) {
+                        SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
+                        return false;
+                    }
+                    // MTP reads target's KV memory by sequence id; bind to slot.id (server uses slot.id as seq_id).
+                    common_speculative_set_seq_id(slot.spec.get(), slot.id);
                     SLT_INF(slot, "%s", "speculative decoding context initialized\n");
                 }
+            } else {
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
@@ -2751,7 +2772,16 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            llama_set_embeddings(ctx, slot_batched->task->need_embd());
+            // MTP speculative decoding requires the *target* context to keep producing
+            // hidden states between rounds (the assistant draft consumes the last
+            // target hidden row as part of its input embedding). Without this, the
+            // server would reset embeddings to false for chat/completion tasks and the
+            // draft would always run on a zero h_prev, ruining acceptance rate.
+            const bool mtp_active =
+                slot_batched->spec != nullptr &&
+                slot_batched->task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP;
+            const bool need_embeddings = slot_batched->task->need_embd() || mtp_active;
+            llama_set_embeddings(ctx, need_embeddings);
         }
 
         if (batch.n_tokens == 0) {
@@ -2964,6 +2994,12 @@ private:
 
                     GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
                     auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx, slot.spec_i_batch, slot.spec_draft);
+
+                    if (!accepted.empty() && accepted.size() <= slot.spec_i_batch.size()) {
+                        const int last_accepted_batch_idx = slot.spec_i_batch[accepted.size() - 1];
+                        common_speculative_set_h_idx(slot.spec.get(), last_accepted_batch_idx);
+                    }
+
                     slot.spec_i_batch.clear();
 
                     SLT_DBG(slot, "%s: n_draft=%zu, accepted=%zu\n", __func__, slot.spec_draft.size(), accepted.size());
@@ -3023,6 +3059,8 @@ private:
 
                 llama_memory_seq_rm(llama_get_memory(slot.ctx), slot.id, slot.prompt.n_tokens(), -1);
 
+                common_speculative_prepare_next(slot.spec.get(), slot.sampled);
+
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;
 
@@ -3036,6 +3074,9 @@ private:
                         slot.print_timings();
                         send_final_response(slot);
                         metrics.on_prediction(slot);
+                        // Drain any pending depth-2 MTP submit before slot.release: the next
+                        // request will seq_rm and overwrite KV cells the worker is still reading.
+                        common_speculative_cancel(slot.spec.get());
                         slot.release();
 
                         break;

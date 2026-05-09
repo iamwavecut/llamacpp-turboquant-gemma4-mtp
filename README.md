@@ -1,3 +1,38 @@
+# TurboQuant Gemma 4 MTP
+
+This repository is a best-effort merge of three experimental llama.cpp forks:
+
+- [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) for the newer TurboQuant baseline.
+- [test1111111111111112/llama-cpp-turboquant-gemma4](https://github.com/test1111111111111112/llama-cpp-turboquant-gemma4) for the extended Gemma 4 CUDA kernel work and inference-speed customizations.
+- [AtomicBot-ai/atomic-llama-cpp-turboquant](https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant) for Gemma 4 MTP assistant support, including `--mtp-head`, `--spec-type mtp`, and server integration.
+
+The goal of this fork is to keep the fresh TurboQuant implementation, preserve the UserTest/test-fork fast kernels that improve Gemma inference, and add Atomic's MTP speculative decoding path in one working tree. This is an integration fork, not an upstream llama.cpp PR.
+
+## Recommended Gemma 4 MTP server mode
+
+This fork is intended to run Gemma 4 with reasoning/thinking disabled. The `aifarm` OpenAI-compatible service currently uses the same no-reasoning shape (`--reasoning off --reasoning-format none --reasoning-budget 0`) together with `--flash-attn on`, `--batch-size 512`, `--ubatch-size 128`, `--fit-target 4096`, `--kv-offload`, `--n-gpu-layers 99`, `--parallel 2`, and a TurboQuant V cache. The MTP command below keeps that service shape and adds the Gemma 4 assistant head:
+
+```sh
+CUDA_VISIBLE_DEVICES=0 ./build-cuda-sm86/bin/llama-server \
+  --model /models/default/gemma-4-26B-A4B-it-heretic.Q4_K_M.gguf \
+  --mtp-head /models/assistants/gemma-4-26B-A4B-it-assistant.Q4_K_M.gguf \
+  --spec-type mtp \
+  --draft-block-size 3 --draft-max 8 --draft-min 0 \
+  --n-gpu-layers 99 --gpu-layers-draft 99 \
+  --cache-type-k q8_0 --cache-type-v turbo4 \
+  --cache-type-k-draft q8_0 --cache-type-v-draft turbo4 \
+  --flash-attn on --kv-offload --fit-target 4096 \
+  --batch-size 512 --ubatch-size 128 \
+  --ctx-size 400000 --parallel 2 --timeout 600 \
+  --reasoning off --reasoning-format none --reasoning-budget 0 \
+  --jinja --chat-template-file /config/chat_template.jinja \
+  --slots --slot-save-path /dev/shm/llamacpp-slot-cache/ \
+  --sleep-idle-seconds -1 --no-warmup --no-webui --alias default \
+  --host 127.0.0.1 --port 8080
+```
+
+The assistant model used for validation was [`AtomicChat/gemma-4-26B-A4B-it-assistant-GGUF`](https://huggingface.co/AtomicChat/gemma-4-26B-A4B-it-assistant-GGUF), file `gemma-4-26B-A4B-it-assistant.Q4_K_M.gguf`. The tested KV cache mode was `K=q8_0, V=turbo4` for both the target and MTP assistant path.
+
 # llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
