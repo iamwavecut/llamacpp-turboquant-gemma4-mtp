@@ -96,6 +96,7 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-q8_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-turbo4_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-turbo4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-f16.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-turbo3_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-turbo4_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-turbo2_0.cu
