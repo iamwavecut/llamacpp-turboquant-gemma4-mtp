@@ -6,7 +6,7 @@ This repository is a best-effort merge of three experimental llama.cpp forks:
 - [test1111111111111112/llama-cpp-turboquant-gemma4](https://github.com/test1111111111111112/llama-cpp-turboquant-gemma4) for the extended Gemma 4 CUDA kernel work and inference-speed customizations.
 - [AtomicBot-ai/atomic-llama-cpp-turboquant](https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant) for Gemma 4 MTP assistant support, including `--mtp-head`, `--spec-type mtp`, and server integration.
 
-The goal of this fork is to keep the fresh TurboQuant implementation, preserve the UserTest/test-fork fast kernels that improve Gemma inference, and add Atomic's MTP speculative decoding path in one working tree. This is an integration fork, not an upstream llama.cpp PR.
+The goal of this fork is to keep the fresh TurboQuant implementation, preserve the fast kernels that improve Gemma inference, and add Atomic's MTP speculative decoding path in one working tree. This is an experimental integration fork, not an upstream llama.cpp PR.
 
 ## Recommended Gemma 4 MTP server mode
 
