@@ -10,12 +10,16 @@ The goal of this fork is to keep the fresh TurboQuant implementation, preserve t
 
 ## Recommended Gemma 4 MTP server mode
 
-This fork is intended to run Gemma 4 with reasoning/thinking disabled. The `aifarm` OpenAI-compatible service currently uses the same no-reasoning shape (`--reasoning off --reasoning-format none --reasoning-budget 0`) together with `--flash-attn on`, `--batch-size 512`, `--ubatch-size 128`, `--fit-target 4096`, `--kv-offload`, `--n-gpu-layers 99`, `--parallel 2`, and a TurboQuant V cache. The MTP command below keeps that service shape and adds the Gemma 4 assistant head:
+This fork is intended to run Gemma 4 with reasoning/thinking disabled. Use `--reasoning off --reasoning-format none --reasoning-budget 0` together with Flash Attention, GPU KV offload, and a TurboQuant V cache. The MTP assistant is loaded into the target model with `--mtp-head`:
 
 ```sh
-CUDA_VISIBLE_DEVICES=0 ./build-cuda-sm86/bin/llama-server \
-  --model /models/default/gemma-4-26B-A4B-it-heretic.Q4_K_M.gguf \
-  --mtp-head /models/assistants/gemma-4-26B-A4B-it-assistant.Q4_K_M.gguf \
+TARGET_GGUF=/path/to/gemma-4-target.gguf
+ASSISTANT_GGUF=/path/to/gemma-4-26B-A4B-it-assistant.Q4_K_M.gguf
+CHAT_TEMPLATE=/path/to/chat_template.jinja
+
+CUDA_VISIBLE_DEVICES=0 ./build/bin/llama-server \
+  --model "$TARGET_GGUF" \
+  --mtp-head "$ASSISTANT_GGUF" \
   --spec-type mtp \
   --draft-block-size 3 --draft-max 8 --draft-min 0 \
   --n-gpu-layers 99 --gpu-layers-draft 99 \
@@ -25,8 +29,8 @@ CUDA_VISIBLE_DEVICES=0 ./build-cuda-sm86/bin/llama-server \
   --batch-size 512 --ubatch-size 128 \
   --ctx-size 400000 --parallel 2 --timeout 600 \
   --reasoning off --reasoning-format none --reasoning-budget 0 \
-  --jinja --chat-template-file /config/chat_template.jinja \
-  --slots --slot-save-path /dev/shm/llamacpp-slot-cache/ \
+  --jinja --chat-template-file "$CHAT_TEMPLATE" \
+  --slots --slot-save-path /tmp/llamacpp-slot-cache/ \
   --sleep-idle-seconds -1 --no-warmup --no-webui --alias default \
   --host 127.0.0.1 --port 8080
 ```
