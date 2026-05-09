@@ -1,4 +1,4 @@
-#include "fattn-vec.cuh"
+#include "../fattn-vec.cuh"
 
 DECL_FATTN_VEC_CASE( 64, GGML_TYPE_TURBO4_0, GGML_TYPE_F16);
 DECL_FATTN_VEC_CASE(128, GGML_TYPE_TURBO4_0, GGML_TYPE_F16);
